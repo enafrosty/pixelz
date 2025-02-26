@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PixelArt Collaborative Canvas</title>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 0;
+      font-family: 'Press Start 2P', cursive;
+      background-color: #222; color: #fff; overflow: hidden;
+    }
+    #controls {
+      position: fixed; top: 0; left: 0; right: 0;
+      background: #000; padding: 10px; z-index: 1000;
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+      border-bottom: 2px solid #fff;
+    }
+    #controls label { font-size: 12px; }
+    #controls input[type="color"] {
+      border: none; background: none; cursor: pointer;
+      width: 40px; height: 40px; padding: 0;
+    }
+    #controls button {
+      background: #444; color: #fff;
+      border: 2px solid #fff; padding: 5px 10px;
+      cursor: pointer; font-size: 12px;
+    }
+    #controls button:hover { background: #666; }
+    #logoutBtn {
+      background: #900; color: #fff;
+      border: 2px solid #fff; padding: 5px 10px;
+      cursor: pointer; font-size: 12px;
+    }
+    #onlineUsers {
+      font-size: 10px; margin-left: auto; white-space: nowrap;
+    }
+    /* Online users: non-enafrosty use default green; enafrosty (or users granted ena privileges)
+       use glowing cyan plus a red "mod" label; other admin users get the red "mod" label.
+    */
+    .normal-user { color: #00ff00; } /* constant green */
+    .special-user { color: cyan; text-shadow: 0 0 5px cyan; }
+    #pinnedColors {
+      display: flex; gap: 5px; align-items: center;
+    }
+    .pinnedColor {
+      width: 30px; height: 30px; border: 2px solid #fff; cursor: pointer;
+    }
+    #cooldownDisplay { font-size: 12px; color: #ff0; }
+    #adminPanel {
+      position: fixed; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: #000; border: 2px solid #fff; padding: 20px;
+      z-index: 2000; display: none;
+    }
+    #adminPanel button { margin: 5px; }
+    #adminPanel input[type="text"] { padding: 5px; font-size: 12px; }
+    /* Transfer Ena Privileges button */
+    #transferEnaBtn {
+      background: #008; color: #fff;
+      border: 2px solid #fff; padding: 5px 10px;
+      cursor: pointer; font-size: 12px;
+    }
+    #usernameOverlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.85); z-index: 3000;
+      display: flex; justify-content: center; align-items: center; flex-direction: column;
+    }
+    #usernameOverlay input { padding: 10px; font-size: 16px; margin-top: 10px; border: none; }
+    #usernameOverlay button { margin-top: 10px; padding: 5px 10px; font-size: 14px; cursor: pointer; }
+    #viewport {
+      position: absolute; top: 60px; left: 0; right: 0; bottom: 0;
+      overflow: auto; background-color: #222;
+    }
+    canvas {
+      background-color: #fff; image-rendering: pixelated;
+      display: block; width: 2000px; height: 2000px;
+    }
+    #drawingStatus { font-size: 12px; }
+  </style>
+</head>
+<body>
+  <!-- Username Overlay -->
+  <div id="usernameOverlay">
+    <h2>Enter your username</h2>
+    <input type="text" id="usernameInput" placeholder="Username" />
+    <button id="usernameSubmit">Submit</button>
+  </div>
+  
+  <!-- Control Panel -->
+  <div id="controls">
+    <label for="colorPicker">Color:</label>
+    <input type="color" id="colorPicker" value="#000000" />
+    <button id="pinColorBtn">Pin Color</button>
+    <button id="unpinAllBtn">Unpin All</button>
+    <div id="pinnedColors"></div>
+    <button id="zoomInBtn">Zoom In</button>
+    <button id="zoomOutBtn">Zoom Out</button>
+    <button id="adminBtn">Admin Panel</button>
+    <button id="downloadBtn">Download</button>
+    <button id="logoutBtn">Logout</button>
+    <div id="onlineUsers"></div>
+    <span id="cooldownDisplay"></span>
+    <span style="font-size: 10px;">
+      (Right-click + drag to pan; left-click to place a pixel – 20 pixels per burst, then 5 sec cooldown)
+    </span>
+  </div>
+  
+  <!-- Admin Panel -->
+  <div id="adminPanel">
+    <h3>Admin Panel</h3>
+    <button id="exportBtn">Export Canvas</button>
+    <button id="toggleDrawingBtn">Toggle Drawing</button>
+    <button id="revokeCanvasBtn">Revoke Canvas</button>
+    <p id="drawingStatus">Drawing Enabled</p>
+    <input type="text" id="targetUsername" placeholder="Target Username" />
+    <button id="disableCooldownBtn">Disable Cooldown</button>
+    <button id="enableCooldownBtn">Enable Cooldown</button>
+    <button id="kickUserBtn">Kick User</button>
+    <br>
+    <input type="text" id="broadcastMessageInput" placeholder="Broadcast Message" />
+    <button id="broadcastMessageBtn">Send Broadcast</button>
+    <br>
+    <button id="backupCanvasBtn">Backup Canvas as JSON</button>
+    <input type="file" id="canvasLoadFile" accept="application/json" />
+    <button id="loadCanvasBtn">Load Canvas Backup</button>
+    <br>
+    <button id="transferEnaBtn">Transfer Ena Privileges</button>
+    <br>
+    <button id="closeAdminBtn">Close</button>
+  </div>
+  
+  <!-- Viewport and Canvas -->
+  <div id="viewport">
+    <canvas id="canvas" width="2000" height="2000"></canvas>
+  </div>
+  
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    // Cookie utilities.
+    function setCookie(cname, cvalue, exdays) {
+      const d = new Date();
+      d.setTime(d.getTime() + (exdays*24*60*60*1000));
+      const expires = "expires=" + d.toUTCString();
+      document.cookie = cname + "=" + cvalue + ";" + expires + ";path=/";
+    }
+    function getCookie(cname) {
+      const name = cname + "=";
+      const ca = document.cookie.split(';');
+      for(let i = 0; i < ca.length; i++) {
+        let c = ca[i].trim();
+        if (c.indexOf(name) === 0) return c.substring(name.length, c.length);
+      }
+      return "";
+    }
+    function deleteCookie(cname) {
+      document.cookie = cname + "=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+    }
+
+    // Element references.
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const colorPicker = document.getElementById('colorPicker');
+    const pinColorBtn = document.getElementById('pinColorBtn');
+    const unpinAllBtn = document.getElementById('unpinAllBtn');
+    const pinnedColorsContainer = document.getElementById('pinnedColors');
+    const zoomInBtn = document.getElementById('zoomInBtn');
+    const zoomOutBtn = document.getElementById('zoomOutBtn');
+    const adminBtn = document.getElementById('adminBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const viewport = document.getElementById('viewport');
+    const adminPanel = document.getElementById('adminPanel');
+    const exportBtn = document.getElementById('exportBtn');
+    const toggleDrawingBtn = document.getElementById('toggleDrawingBtn');
+    const revokeCanvasBtn = document.getElementById('revokeCanvasBtn');
+    const drawingStatusP = document.getElementById('drawingStatus');
+    const targetUsernameInput = document.getElementById('targetUsername');
+    const disableCooldownBtn = document.getElementById('disableCooldownBtn');
+    const enableCooldownBtn = document.getElementById('enableCooldownBtn');
+    const kickUserBtn = document.getElementById('kickUserBtn');
+    const broadcastMessageInput = document.getElementById('broadcastMessageInput');
+    const broadcastMessageBtn = document.getElementById('broadcastMessageBtn');
+    const backupCanvasBtn = document.getElementById('backupCanvasBtn');
+    const canvasLoadFile = document.getElementById('canvasLoadFile');
+    const loadCanvasBtn = document.getElementById('loadCanvasBtn');
+    const transferEnaBtn = document.getElementById('transferEnaBtn');
+    const closeAdminBtn = document.getElementById('closeAdminBtn');
+    const cooldownDisplay = document.getElementById('cooldownDisplay');
+    const onlineUsersDiv = document.getElementById('onlineUsers');
+    const usernameOverlay = document.getElementById('usernameOverlay');
+    const usernameInput = document.getElementById('usernameInput');
+    const usernameSubmit = document.getElementById('usernameSubmit');
+
+    let username = "";
+    let myCooldownDisabled = false;
+    let freeDrawingMode = false;
+    let freeDrawingActive = false;
+    let lastFreeDrawCell = null;
+    let adminAccess = false;
+
+    // Persistent login: if a cookie exists, use it.
+    const savedUsername = getCookie("userData");
+    if (savedUsername) {
+      try {
+        const userData = JSON.parse(savedUsername);
+        username = userData.username;
+        // Send full persistent user data.
+        socket.emit('setUserData', userData);
+        usernameOverlay.style.display = "none";
+        // If enafrosty, enable free drawing and admin.
+        if (username.toLowerCase() === "enafrosty") {
+          freeDrawingMode = true;
+          myCooldownDisabled = true;
+          adminAccess = true;
+          // No need to prompt password.
+          initFreeDrawing();
+        }
+      } catch(e) {
+        console.error("Error parsing userData cookie:", e);
+      }
+    }
+
+    // Logout functionality.
+    logoutBtn.addEventListener('click', () => {
+      deleteCookie("userData");
+      location.reload();
+    });
+
+    usernameSubmit.addEventListener('click', async () => {
+      const name = usernameInput.value.trim();
+      if (name !== "") {
+        let userData = { username: name, admin: false, color: "#00ff00" };
+        if (name.toLowerCase() === "enafrosty") {
+          // For enafrosty, auto-grant privileges.
+          freeDrawingMode = true;
+          myCooldownDisabled = true;
+          adminAccess = true;
+          userData.admin = true;
+          userData.color = "#00ffff";
+          initFreeDrawing();
+        }
+        username = name;
+        socket.emit('setUserData', userData);
+        setCookie("userData", JSON.stringify(userData), 30);
+        usernameOverlay.style.display = "none";
+      } else {
+        alert("Please enter a valid username.");
+      }
+    });
+
+    const baseCellSize = 10;
+    let zoom = 1;
+    function getCellSize() { return baseCellSize * zoom; }
+
+    const pixels = {};
+    let pinnedColors = JSON.parse(localStorage.getItem('pinnedColors')) || [];
+    function renderPinnedColors() {
+      pinnedColorsContainer.innerHTML = '';
+      pinnedColors.forEach(color => {
+        const swatch = document.createElement('div');
+        swatch.className = 'pinnedColor';
+        swatch.style.backgroundColor = color;
+        swatch.addEventListener('click', () => { colorPicker.value = color; });
+        pinnedColorsContainer.appendChild(swatch);
+      });
+    }
+    renderPinnedColors();
+    unpinAllBtn.addEventListener('click', () => {
+      pinnedColors = [];
+      localStorage.setItem('pinnedColors', JSON.stringify(pinnedColors));
+      renderPinnedColors();
+    });
+    pinColorBtn.addEventListener('click', () => {
+      const color = colorPicker.value;
+      if (!pinnedColors.includes(color)) {
+        pinnedColors.push(color);
+        localStorage.setItem('pinnedColors', JSON.stringify(pinnedColors));
+        renderPinnedColors();
+      }
+    });
+
+    let globalDrawingEnabled = true;
+    let cooldownActive = false;
+    let cooldownRemaining = 0;
+    let cooldownInterval = null;
+    function startCooldown() {
+      cooldownActive = true;
+      cooldownRemaining = 5;
+      updateCooldownDisplay();
+      cooldownInterval = setInterval(() => {
+        cooldownRemaining--;
+        updateCooldownDisplay();
+        if (cooldownRemaining <= 0) {
+          clearInterval(cooldownInterval);
+          cooldownActive = false;
+          updateCooldownDisplay();
+        }
+      }, 1000);
+    }
+    function updateCooldownDisplay() {
+      cooldownDisplay.textContent = cooldownActive ? `Cooldown: ${cooldownRemaining}s` : "";
+    }
+
+    function redrawCanvas() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = "#ccc";
+      const cellSize = getCellSize();
+      for (let x = 0; x <= canvas.width; x += cellSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      for (let y = 0; y <= canvas.height; y += cellSize) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+      for (const key in pixels) {
+        if (pixels.hasOwnProperty(key)) {
+          const [col, row] = key.split(',').map(Number);
+          drawPixel(col, row, pixels[key]);
+        }
+      }
+    }
+    function drawPixel(col, row, color) {
+      const cellSize = getCellSize();
+      ctx.fillStyle = color;
+      ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
+      ctx.strokeStyle = "#ccc";
+      ctx.strokeRect(col * cellSize, row * cellSize, cellSize, cellSize);
+    }
+    redrawCanvas();
+
+    zoomInBtn.addEventListener('click', () => {
+      if (zoom < 2) { zoom = Math.min(2, zoom + 0.1); redrawCanvas(); }
+    });
+    zoomOutBtn.addEventListener('click', () => {
+      if (zoom > 0.5) { zoom = Math.max(0.5, zoom - 0.1); redrawCanvas(); }
+    });
+
+    viewport.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      const oldZoom = zoom;
+      let newZoom = zoom;
+      if (event.deltaY < 0) { if (zoom < 2) { newZoom = Math.min(2, zoom + 0.1); } }
+      else { if (zoom > 0.5) { newZoom = Math.max(0.5, zoom - 0.1); } }
+      if (newZoom === zoom) return;
+      let anchorX, anchorY;
+      if (Object.keys(pixels).length > 0) {
+        let minCol = Infinity, maxCol = -Infinity, minRow = Infinity, maxRow = -Infinity;
+        for (const key in pixels) {
+          if (pixels.hasOwnProperty(key)) {
+            const [col, row] = key.split(',').map(Number);
+            minCol = Math.min(minCol, col);
+            maxCol = Math.max(maxCol, col);
+            minRow = Math.min(minRow, row);
+            maxRow = Math.max(maxRow, row);
+          }
+        }
+        const centerCol = (minCol + maxCol + 1) / 2;
+        const centerRow = (minRow + maxRow + 1) / 2;
+        anchorX = centerCol * (baseCellSize * oldZoom);
+        anchorY = centerRow * (baseCellSize * oldZoom);
+      } else {
+        const vpRect = viewport.getBoundingClientRect();
+        anchorX = viewport.scrollLeft + vpRect.width / 2;
+        anchorY = viewport.scrollTop + vpRect.height / 2;
+      }
+      const oldCellSize = baseCellSize * oldZoom;
+      const newCellSize = baseCellSize * newZoom;
+      const cellX = anchorX / oldCellSize;
+      const cellY = anchorY / oldCellSize;
+      zoom = newZoom;
+      redrawCanvas();
+      const newAnchorX = cellX * newCellSize;
+      const newAnchorY = cellY * newCellSize;
+      const vpRect = viewport.getBoundingClientRect();
+      const relX = anchorX - viewport.scrollLeft;
+      const relY = anchorY - viewport.scrollTop;
+      viewport.scrollLeft = newAnchorX - relX;
+      viewport.scrollTop = newAnchorY - relY;
+    });
+
+    canvas.addEventListener('click', (event) => {
+      if (freeDrawingMode) return;
+      if (event.button !== 0) return;
+      if (!globalDrawingEnabled) { alert("Drawing is currently disabled."); return; }
+      if (cooldownActive && !myCooldownDisabled) { return; }
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      const cellSize = getCellSize();
+      const col = Math.floor(x / cellSize);
+      const row = Math.floor(y / cellSize);
+      const color = colorPicker.value;
+      pixels[`${col},${row}`] = color;
+      drawPixel(col, row, color);
+      socket.emit('drawPixel', { col, row, color, username });
+      if (!myCooldownDisabled) {
+        pixelsDrawn++;
+        if (pixelsDrawn >= 20) {
+          startCooldown();
+          pixelsDrawn = 0;
+        }
+      }
+    });
+    let pixelsDrawn = 0;
+
+    // Free drawing mode for enafrosty: draws continuously.
+    function initFreeDrawing() {
+      canvas.addEventListener('mousedown', freeDrawingMousedown);
+      canvas.addEventListener('mousemove', freeDrawingMousemove);
+      canvas.addEventListener('mouseup', freeDrawingMouseup);
+      canvas.addEventListener('mouseleave', freeDrawingMouseup);
+    }
+    function freeDrawingMousedown(event) {
+      if (event.button !== 0) return;
+      freeDrawingActive = true;
+      lastFreeDrawCell = getCellFromEvent(event);
+    }
+    function freeDrawingMousemove(event) {
+      if (!freeDrawingActive) return;
+      const currentCell = getCellFromEvent(event);
+      if (!lastFreeDrawCell || currentCell.col !== lastFreeDrawCell.col || currentCell.row !== lastFreeDrawCell.row) {
+        drawLine(lastFreeDrawCell.col, lastFreeDrawCell.row, currentCell.col, currentCell.row, colorPicker.value);
+        lastFreeDrawCell = currentCell;
+      }
+    }
+    function freeDrawingMouseup(event) {
+      if (freeDrawingActive) {
+        freeDrawingActive = false;
+        lastFreeDrawCell = null;
+      }
+    }
+    function getCellFromEvent(event) {
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      const cellSize = getCellSize();
+      return { col: Math.floor(x / cellSize), row: Math.floor(y / cellSize) };
+    }
+    function drawLine(x0, y0, x1, y1, color) {
+      let dx = Math.abs(x1 - x0);
+      let dy = Math.abs(y1 - y0);
+      let sx = x0 < x1 ? 1 : -1;
+      let sy = y0 < y1 ? 1 : -1;
+      let err = dx - dy;
+      while (true) {
+        pixels[`${x0},${y0}`] = color;
+        drawPixel(x0, y0, color);
+        socket.emit('drawPixel', { col: x0, row: y0, color, username });
+        if (x0 === x1 && y0 === y1) break;
+        let e2 = 2 * err;
+        if (e2 > -dy) { err -= dy; x0 += sx; }
+        if (e2 < dx) { err += dx; y0 += sy; }
+      }
+    }
+
+    let isPanning = false, panStart = { x: 0, y: 0 }, viewportStartScroll = { left: 0, top: 0 };
+    canvas.addEventListener('mousedown', (event) => {
+      if (event.button === 2) {
+        isPanning = true;
+        panStart = { x: event.clientX, y: event.clientY };
+        viewportStartScroll = { left: viewport.scrollLeft, top: viewport.scrollTop };
+        event.preventDefault();
+      }
+    });
+    canvas.addEventListener('mousemove', (event) => {
+      if (isPanning) {
+        const dx = event.clientX - panStart.x;
+        const dy = event.clientY - panStart.y;
+        viewport.scrollLeft = viewportStartScroll.left - dx;
+        viewport.scrollTop = viewportStartScroll.top - dy;
+      }
+    });
+    document.addEventListener('mouseup', (event) => {
+      if (isPanning && event.button === 2) { isPanning = false; }
+    });
+    canvas.addEventListener('contextmenu', (event) => { event.preventDefault(); });
+
+    // Admin Panel: Accessible only if username is "enafrosty" or adminAccess is true.
+    adminBtn.addEventListener('click', () => {
+      if (username.toLowerCase() === "enafrosty" || adminAccess) {
+        adminPanel.style.display = "block";
+      } else {
+        alert("You do not have admin access.");
+      }
+    });
+    closeAdminBtn.addEventListener('click', () => { adminPanel.style.display = "none"; });
+    exportBtn.addEventListener('click', () => {
+      const dataURL = canvas.toDataURL("image/png");
+      const link = document.createElement('a');
+      link.href = dataURL;
+      link.download = 'pixelart_canvas.png';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    });
+    toggleDrawingBtn.addEventListener('click', () => {
+      socket.emit('toggleDrawing');
+    });
+    revokeCanvasBtn.addEventListener('click', () => {
+      if (confirm("Are you sure you want to clear the canvas for all users?")) {
+        socket.emit('revokeCanvas');
+      }
+    });
+    downloadBtn.addEventListener('click', () => {
+      const pwd = prompt("Enter password to download the image:");
+      if (pwd === "heil") {
+        const dataURL = canvas.toDataURL("image/png");
+        const link = document.createElement('a');
+        link.href = dataURL;
+        link.download = 'pixelart_canvas.png';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } else { alert("Incorrect password!"); }
+    });
+    disableCooldownBtn.addEventListener('click', () => {
+      const target = targetUsernameInput.value.trim();
+      if (target === "") { alert("Please enter a username."); return; }
+      socket.emit('setCooldown', { username: target, disabled: true });
+    });
+    enableCooldownBtn.addEventListener('click', () => {
+      const target = targetUsernameInput.value.trim();
+      if (target === "") { alert("Please enter a username."); return; }
+      socket.emit('setCooldown', { username: target, disabled: false });
+    });
+    kickUserBtn.addEventListener('click', () => {
+      const target = targetUsernameInput.value.trim();
+      if (target === "") { alert("Please enter a username."); return; }
+      if (confirm("Are you sure you want to kick user '" + target + "'?")) {
+        socket.emit('kickUser', { username: target });
+      }
+    });
+    broadcastMessageBtn.addEventListener('click', () => {
+      const msg = broadcastMessageInput.value.trim();
+      if (msg === "") { alert("Please enter a message to broadcast."); return; }
+      socket.emit('broadcastMessage', { message: msg });
+      broadcastMessageInput.value = "";
+    });
+    backupCanvasBtn.addEventListener('click', () => {
+      const backupData = JSON.stringify(pixels);
+      const blob = new Blob([backupData], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = "canvas_backup_" + new Date().toISOString().replace(/[:.]/g, '-') + ".json";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    });
+    loadCanvasBtn.addEventListener('click', () => {
+      const file = canvasLoadFile.files[0];
+      if (!file) { alert("Please select a JSON backup file."); return; }
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const newState = JSON.parse(e.target.result);
+          for (let key in pixels) { delete pixels[key]; }
+          socket.emit('loadCanvasState', newState);
+        } catch (err) {
+          alert("Error parsing backup file.");
+        }
+      };
+      reader.readAsText(file);
+    });
+    socket.on('cooldownStatus', (data) => {
+      if (data.username === username) {
+        myCooldownDisabled = data.disabled;
+      }
+    });
+    socket.on('broadcastMessage', (data) => {
+      alert("Broadcast: " + data.message);
+    });
+    socket.on('init', (state) => {
+      for (let key in pixels) { delete pixels[key]; }
+      Object.assign(pixels, state);
+      redrawCanvas();
+    });
+    socket.on('pixelDrawn', (data) => {
+      const { col, row, color } = data;
+      pixels[`${col},${row}`] = color;
+      drawPixel(col, row, color);
+    });
+    socket.on('canvasRevoked', () => {
+      for (let key in pixels) { if (pixels.hasOwnProperty(key)) { delete pixels[key]; } }
+      redrawCanvas();
+    });
+    socket.on('drawingStatus', (status) => {
+      globalDrawingEnabled = status;
+      drawingStatusP.textContent = status ? "Drawing Enabled" : "Drawing Disabled";
+    });
+    // onlineUsers is expected as an array of objects: { username, admin, color }.
+    socket.on('onlineUsers', (users) => {
+      const formatted = users.map(u => {
+        if (u.username.toLowerCase() === "enafrosty") {
+          return `<span class="special-user">${u.username}</span> <span style="color:red; font-size:8px;">mod</span>`;
+        } else if (u.admin) {
+          return `<span style="color:${u.color}">${u.username}</span> <span style="color:red; font-size:8px;">mod</span>`;
+        } else {
+          return `<span style="color:${u.color}">${u.username}</span>`;
+        }
+      });
+      onlineUsersDiv.innerHTML = "Online Users (" + users.length + "): " + formatted.join(", ");
+    });
+    socket.on('kickUser', () => {
+      alert("You have been kicked by an admin.");
+      socket.disconnect();
+      location.reload();
+    });
+    socket.on('adminAccessGranted', () => {
+      adminAccess = true;
+      alert("You have been given admin access.");
+    });
+    socket.on('adminAccessRevoked', () => {
+      adminAccess = false;
+      alert("Your admin access has been revoked.");
+    });
+    socket.on('enaPrivilegesGranted', () => {
+      // When a user is granted enafrosty privileges, enable free drawing.
+      if (username.toLowerCase() !== "enafrosty") {
+        freeDrawingMode = true;
+        myCooldownDisabled = true;
+        adminAccess = true;
+        initFreeDrawing();
+        alert("You have been given enafrosty privileges.");
+      }
+    });
+    socket.on('errorMessage', (data) => {
+      alert(data.message);
+    });
+    transferEnaBtn.addEventListener('click', () => {
+      const target = targetUsernameInput.value.trim();
+      if (!target) {
+        alert("Please enter a target username.");
+        return;
+      }
+      socket.emit('transferEnaPrivileges', { targetUsername: target });
+    });
+  </script>
+</body>
+</html>
