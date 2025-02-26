@@ -37,17 +37,11 @@
     #onlineUsers {
       font-size: 10px; margin-left: auto; white-space: nowrap;
     }
-    /* Online users: non-enafrosty use default green; enafrosty (or users granted ena privileges)
-       use glowing cyan plus a red "mod" label; other admin users get the red "mod" label.
-    */
-    .normal-user { color: #00ff00; } /* constant green */
+    /* Online users: non-enafrosty use constant green; enafrosty uses glowing cyan with red "mod" label; other admin users get red "mod" too. */
+    .normal-user { color: #00ff00; }
     .special-user { color: cyan; text-shadow: 0 0 5px cyan; }
-    #pinnedColors {
-      display: flex; gap: 5px; align-items: center;
-    }
-    .pinnedColor {
-      width: 30px; height: 30px; border: 2px solid #fff; cursor: pointer;
-    }
+    #pinnedColors { display: flex; gap: 5px; align-items: center; }
+    .pinnedColor { width: 30px; height: 30px; border: 2px solid #fff; cursor: pointer; }
     #cooldownDisplay { font-size: 12px; color: #ff0; }
     #adminPanel {
       position: fixed; top: 50%; left: 50%;
@@ -161,6 +155,10 @@
       document.cookie = cname + "=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
     }
 
+    // Constant colors.
+    const DEFAULT_COLOR = "#00ff00";
+    const ENA_COLOR = "#00ffff";
+
     // Element references.
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
@@ -203,22 +201,18 @@
     let lastFreeDrawCell = null;
     let adminAccess = false;
 
-    // Persistent login: if a cookie exists, use it.
-    const savedUsername = getCookie("userData");
-    if (savedUsername) {
+    // Persistent login: use the cookie only if not enafrosty.
+    const savedUserData = getCookie("userData");
+    if (savedUserData) {
       try {
-        const userData = JSON.parse(savedUsername);
-        username = userData.username;
-        // Send full persistent user data.
-        socket.emit('setUserData', userData);
-        usernameOverlay.style.display = "none";
-        // If enafrosty, enable free drawing and admin.
-        if (username.toLowerCase() === "enafrosty") {
-          freeDrawingMode = true;
-          myCooldownDisabled = true;
-          adminAccess = true;
-          // No need to prompt password.
-          initFreeDrawing();
+        const userData = JSON.parse(savedUserData);
+        if (userData.username.toLowerCase() === "enafrosty") {
+          // Force re-login for enafrosty.
+          usernameOverlay.style.display = "block";
+        } else {
+          username = userData.username;
+          socket.emit('setUserData', userData);
+          usernameOverlay.style.display = "none";
         }
       } catch(e) {
         console.error("Error parsing userData cookie:", e);
@@ -234,20 +228,36 @@
     usernameSubmit.addEventListener('click', async () => {
       const name = usernameInput.value.trim();
       if (name !== "") {
-        let userData = { username: name, admin: false, color: "#00ff00" };
+        let userData = { username: name, admin: false, color: DEFAULT_COLOR };
         if (name.toLowerCase() === "enafrosty") {
-          // For enafrosty, auto-grant privileges.
-          freeDrawingMode = true;
-          myCooldownDisabled = true;
-          adminAccess = true;
-          userData.admin = true;
-          userData.color = "#00ffff";
-          initFreeDrawing();
+          // For enafrosty, always require a password.
+          const pwd = prompt("Enter password for username 'enafrosty':");
+          if (!pwd) {
+            alert("Password is required.");
+            return;
+          }
+          socket.emit('verifyAdminPassword', pwd);
+          socket.once('adminVerified', () => {
+            freeDrawingMode = true;
+            myCooldownDisabled = true;
+            adminAccess = true;
+            userData.admin = true;
+            userData.color = ENA_COLOR;
+            username = name;
+            socket.emit('setUserData', userData);
+            setCookie("userData", JSON.stringify(userData), 30);
+            usernameOverlay.style.display = "none";
+            initFreeDrawing();
+          });
+          socket.once('adminVerificationFailed', () => {
+            alert("Incorrect password for 'enafrosty'.");
+          });
+        } else {
+          username = name;
+          socket.emit('setUserData', userData);
+          setCookie("userData", JSON.stringify(userData), 30);
+          usernameOverlay.style.display = "none";
         }
-        username = name;
-        socket.emit('setUserData', userData);
-        setCookie("userData", JSON.stringify(userData), 30);
-        usernameOverlay.style.display = "none";
       } else {
         alert("Please enter a valid username.");
       }

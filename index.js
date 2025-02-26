@@ -70,19 +70,19 @@ function verifyAdminPassword(pwd) {
   return hash === process.env.ADMIN_HASH;
 }
 
-// Use setUserData to accept persistent user data from the client.
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
+  // Instead of setUsername, we use setUserData to accept persistent user data.
   socket.on('setUserData', (data) => {
     // data: { username, color, admin }
-    // If the username is "enafrosty", enforce enafrosty privileges.
-    if(data.username.toLowerCase() === "enafrosty") {
+    // Enforce enafrosty privileges if username is "enafrosty"
+    if (data.username.toLowerCase() === "enafrosty") {
       data.color = ENA_COLOR;
       data.admin = true;
     } else {
-      // For any other user, assign default color.
       data.color = DEFAULT_COLOR;
+      data.admin = false;
     }
     onlineUsers[socket.id] = data;
     broadcastOnlineUsers();
@@ -94,8 +94,8 @@ io.on('connection', (socket) => {
     if (verifyAdminPassword(pwd)) {
       if (onlineUsers[socket.id]) {
         onlineUsers[socket.id].admin = true;
-        // Also assign enafrosty color if verifying for enafrosty.
-        if(onlineUsers[socket.id].username.toLowerCase() === "enafrosty") {
+        // Also ensure enafrosty gets ENA_COLOR.
+        if (onlineUsers[socket.id].username.toLowerCase() === "enafrosty") {
           onlineUsers[socket.id].color = ENA_COLOR;
         }
       }
@@ -177,7 +177,7 @@ io.on('connection', (socket) => {
       socket.emit('errorMessage', { message: "Target user not found." });
       return;
     }
-    // Remove enafrosty privileges from any user currently using that name.
+    // Remove enafrosty privileges from any user using that name.
     for (const [id, info] of Object.entries(onlineUsers)) {
       if (info.username.toLowerCase() === "enafrosty") {
         onlineUsers[id].admin = false;
@@ -192,7 +192,6 @@ io.on('connection', (socket) => {
     broadcastOnlineUsers();
   });
 
-  // (Optional) Handle cursor movement.
   socket.on('cursorMove', (data) => {
     socket.broadcast.emit('cursorMove', data);
   });
