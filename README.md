@@ -1,4 +1,7 @@
 
+![Logo](https://cdn.discordapp.com/attachments/1255980048062611499/1344742347216257156/Pixelz-2-27-2025_1.png?ex=67c20467&is=67c0b2e7&hm=1686e09036706ac2127f056df6ce53b17c6cca94cbc033960ee07067497be1ed&)
+
+
 # PIXELZ 
 
 Pixel war right inside your browser, more like r/place but less sane
