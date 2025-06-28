@@ -1,5 +1,4 @@
 
-![Logo](https://cdn.discordapp.com/attachments/1255980048062611499/1344743346001674250/Pixelz-2-27-2025_3.png?ex=67c20555&is=67c0b3d5&hm=ddf7ff3d2143a3d34993a73f927d6aced39b4ac4ed086e87dfc247440e9f1391&)
 
 
 # PIXELZ 
